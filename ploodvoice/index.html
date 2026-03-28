@@ -3,65 +3,123 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PICO-8 Tilted Saw Synth</title>
+    <title>Plood Synth</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        .key-active { transform: translateY(2px); filter: brightness(1.2); box-shadow: 0 0 15px rgba(59, 130, 246, 0.5); }
-        .white-key { height: 160px; width: 60px; border: 1px solid #333; border-radius: 0 0 6px 6px; background: #eee; transition: all 0.1s; }
-        .black-key { height: 100px; width: 40px; margin-left: -20px; margin-right: -20px; z-index: 10; border-radius: 0 0 4px 4px; background: #111; color: white; border: 1px solid #444; position: relative; transition: all 0.1s; }
-        .recording-pulse { animation: pulse 1s infinite; background-color: #ef4444 !important; }
+        .key-active { transform: translateY(2px); filter: brightness(1.2); box-shadow: 0 0 15px rgba(41, 173, 255, 0.5); }
+        .white-key { height: 120px; width: 45px; border: 1px solid #333; border-radius: 0 0 6px 6px; background: #eee; transition: all 0.1s; flex-shrink: 0; }
+        .black-key { height: 70px; width: 30px; margin-left: -15px; margin-right: -15px; z-index: 10; border-radius: 0 0 4px 4px; background: #111; color: white; border: 1px solid #444; position: relative; transition: all 0.1s; flex-shrink: 0; }
+        .recording-pulse { animation: pulse 1s infinite; background-color: #ff004d !important; }
         @keyframes pulse {
             0% { transform: scale(1); opacity: 1; }
-            50% { transform: scale(1.1); opacity: 0.7; }
+            50% { transform: scale(1.05); opacity: 0.8; }
             100% { transform: scale(1); opacity: 1; }
         }
         .pico-border { border: 4px solid #1d1d1d; image-rendering: pixelated; }
-        #canvas { width: 100%; height: 100px; background: #000; border: 2px solid #5f574f; }
+        #canvas { width: 100%; height: 60px; background: #000; border: 2px solid #5f574f; }
+        
+        /* Sequencer Styles */
+        .seq-grid { display: grid; grid-template-columns: 80px 1fr; gap: 2px; background: #111; overflow-x: auto; max-height: 400px; }
+        .seq-row { display: flex; height: 24px; }
+        .seq-cell { width: 30px; height: 24px; border: 1px solid #222; cursor: pointer; flex-shrink: 0; }
+        .seq-cell:nth-child(4n) { border-right: 1px solid #444; }
+        .seq-cell.active-ninjaguy { background: #29adff; box-shadow: inset 0 0 5px rgba(0,0,0,0.5); }
+        .seq-cell.active-villager { background: #ffccaa; box-shadow: inset 0 0 5px rgba(0,0,0,0.5); }
+        .seq-cell.playing { border: 1px solid #fff; z-index: 5; }
+        .note-label { width: 80px; font-size: 10px; background: #1d1d1d; display: flex; align-items: center; padding-left: 5px; color: #5f574f; border-bottom: 1px solid #111; position: sticky; left: 0; z-index: 20; }
     </style>
 </head>
-<body class="bg-black text-zinc-100 min-h-screen flex flex-col items-center justify-center p-4 font-mono">
+<body class="bg-[#000] text-zinc-100 min-h-screen flex flex-col items-center p-4 font-mono">
 
-    <div class="max-w-2xl w-full bg-[#1d1d1d] p-1 pico-border rounded-lg shadow-2xl">
-        <div class="bg-[#ff004d] p-4 text-white flex justify-between items-center mb-1">
-            <h1 class="text-2xl font-bold tracking-tighter uppercase italic">Tilted Saw Engine</h1>
-            <div id="status" class="bg-black text-[#ff004d] px-3 py-1 text-xs">READY</div>
+    <div class="max-w-4xl w-full bg-[#1d1d1d] p-1 pico-border rounded-lg shadow-2xl">
+        <!-- Header -->
+        <div class="bg-[#29adff] p-4 text-black flex justify-between items-center mb-1">
+            <h1 class="text-2xl font-bold tracking-tighter uppercase italic">Plood Synth & Composer</h1>
+            <div class="flex gap-2">
+                <button id="modeToggle" class="bg-black text-[#29adff] px-4 py-1 text-xs border border-black hover:border-[#fff] transition-all">SWITCH TO COMPOSER</button>
+                <div id="status" class="bg-black text-white px-3 py-1 text-xs border border-zinc-800">READY</div>
+            </div>
         </div>
 
-        <div class="bg-zinc-900 p-6">
-            <!-- Wave Visualizer -->
-            <div class="mb-6">
-                <div class="text-[10px] text-[#5f574f] mb-1 uppercase tracking-widest">Oscilloscope</div>
-                <canvas id="canvas"></canvas>
-            </div>
+        <div class="bg-zinc-900 p-4 md:p-6">
+            <!-- Global Controls -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                <div class="bg-black/40 p-3 rounded border border-zinc-800">
+                    <label class="text-[10px] text-[#5f574f] uppercase tracking-widest font-bold">Master Recording</label>
+                    <button id="recBtn" class="w-full mt-2 flex items-center justify-center gap-3 px-4 py-2 bg-[#5f574f] hover:bg-zinc-600 rounded font-bold transition-all text-xs uppercase text-white">
+                        <span id="recDot" class="w-3 h-3 bg-zinc-400 rounded-full"></span>
+                        <span id="recText">Record .WAV</span>
+                    </button>
+                </div>
 
-            <!-- Recording Controls -->
-            <div class="flex items-center justify-between mb-8 bg-black/40 p-4 rounded border border-zinc-800">
-                <button id="recBtn" class="flex items-center gap-3 px-6 py-3 bg-[#5f574f] hover:bg-zinc-600 rounded font-bold transition-all active:scale-95 text-xs uppercase tracking-widest text-white">
-                    <span id="recDot" class="w-3 h-3 bg-zinc-400 rounded-full"></span>
-                    <span id="recText">Record .WAV</span>
-                </button>
-                <div class="text-[10px] text-zinc-500 text-right leading-tight">
-                    GEOMETRY: ASYMMETRIC<br>
-                    SLOPE: TILTED_UP
+                <div id="liveVoiceControls" class="bg-black/40 p-3 rounded border border-zinc-800">
+                    <label class="text-[10px] text-[#5f574f] uppercase tracking-widest font-bold">Live Voice</label>
+                    <select id="voiceSelect" class="w-full mt-2 bg-zinc-800 text-white border border-zinc-700 px-3 py-1.5 rounded text-xs focus:outline-none">
+                        <option value="ninjaguy">Ninjaguy (Tilted Saw)</option>
+                        <option value="villager">Villager (Octave Triangle)</option>
+                    </select>
+                </div>
+
+                <div class="bg-black/40 p-3 rounded border border-zinc-800">
+                    <label class="text-[10px] text-[#5f574f] uppercase tracking-widest font-bold">Visualizer</label>
+                    <canvas id="canvas" class="mt-2"></canvas>
                 </div>
             </div>
 
-            <!-- Keyboard Visualizer -->
-            <div class="flex justify-center items-start select-none py-4 bg-black rounded-lg mb-6 border-b-8 border-zinc-800">
-                <div class="flex relative">
-                    <div id="key-A" class="white-key flex flex-col justify-end items-center pb-4 text-zinc-400 font-bold">A</div>
-                    <div class="relative"><div id="key-W" class="black-key flex flex-col justify-end items-center pb-4 text-[9px] absolute">W</div></div>
-                    <div id="key-S" class="white-key flex flex-col justify-end items-center pb-4 text-zinc-400 font-bold">S</div>
-                    <div class="relative"><div id="key-E" class="black-key flex flex-col justify-end items-center pb-4 text-[9px] absolute">E</div></div>
-                    <div id="key-D" class="white-key flex flex-col justify-end items-center pb-4 text-zinc-400 font-bold">D</div>
-                    <div id="key-F" class="white-key flex flex-col justify-end items-center pb-4 text-zinc-400 font-bold">F</div>
-                    <div class="relative"><div id="key-T" class="black-key flex flex-col justify-end items-center pb-4 text-[9px] absolute">T</div></div>
-                    <div id="key-G" class="white-key flex flex-col justify-end items-center pb-4 text-zinc-400 font-bold">G</div>
-                    <div class="relative"><div id="key-Y" class="black-key flex flex-col justify-end items-center pb-4 text-[9px] absolute">Y</div></div>
-                    <div id="key-H" class="white-key flex flex-col justify-end items-center pb-4 text-zinc-400 font-bold">H</div>
-                    <div class="relative"><div id="key-U" class="black-key flex flex-col justify-end items-center pb-4 text-[9px] absolute">U</div></div>
-                    <div id="key-J" class="white-key flex flex-col justify-end items-center pb-4 text-zinc-400 font-bold">J</div>
-                    <div id="key-K" class="white-key flex flex-col justify-end items-center pb-4 text-zinc-400 font-bold">K</div>
+            <!-- LIVE MODE -->
+            <div id="liveView" class="block">
+                <div class="flex justify-center items-start select-none py-4 bg-black rounded-lg mb-4 border-b-8 border-zinc-800 overflow-x-auto">
+                    <div class="flex relative min-w-max px-8">
+                        <div id="key-A" class="white-key flex flex-col justify-end items-center pb-4 text-zinc-400 font-bold text-xs">A</div>
+                        <div class="relative"><div id="key-W" class="black-key flex flex-col justify-end items-center pb-4 text-[9px] absolute">W</div></div>
+                        <div id="key-S" class="white-key flex flex-col justify-end items-center pb-4 text-zinc-400 font-bold text-xs">S</div>
+                        <div class="relative"><div id="key-E" class="black-key flex flex-col justify-end items-center pb-4 text-[9px] absolute">E</div></div>
+                        <div id="key-D" class="white-key flex flex-col justify-end items-center pb-4 text-zinc-400 font-bold text-xs">D</div>
+                        <div id="key-F" class="white-key flex flex-col justify-end items-center pb-4 text-zinc-400 font-bold text-xs">F</div>
+                        <div class="relative"><div id="key-T" class="black-key flex flex-col justify-end items-center pb-4 text-[9px] absolute">T</div></div>
+                        <div id="key-G" class="white-key flex flex-col justify-end items-center pb-4 text-zinc-400 font-bold text-xs">G</div>
+                        <div class="relative"><div id="key-Y" class="black-key flex flex-col justify-end items-center pb-4 text-[9px] absolute">Y</div></div>
+                        <div id="key-H" class="white-key flex flex-col justify-end items-center pb-4 text-zinc-400 font-bold text-xs">H</div>
+                        <div class="relative"><div id="key-U" class="black-key flex flex-col justify-end items-center pb-4 text-[9px] absolute">U</div></div>
+                        <div id="key-J" class="white-key flex flex-col justify-end items-center pb-4 text-zinc-400 font-bold text-xs">J</div>
+                        <div id="key-K" class="white-key flex flex-col justify-end items-center pb-4 text-zinc-400 font-bold text-xs">K</div>
+                    </div>
+                </div>
+                <p class="text-[10px] text-zinc-500 text-center uppercase">Keyboard input active for Live Voice</p>
+            </div>
+
+            <!-- COMPOSER MODE -->
+            <div id="composerView" class="hidden">
+                <!-- Composer Settings -->
+                <div class="flex flex-wrap gap-4 mb-4 items-end bg-black/20 p-3 rounded">
+                    <div>
+                        <label class="block text-[10px] text-zinc-500 uppercase mb-1">BPM</label>
+                        <input type="number" id="bpmInput" value="120" min="40" max="300" class="bg-zinc-800 text-white text-xs px-2 py-1 rounded w-16">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] text-zinc-500 uppercase mb-1">Steps</label>
+                        <select id="lengthSelect" class="bg-zinc-800 text-white text-xs px-2 py-1 rounded">
+                            <option value="8">8</option>
+                            <option value="16">16</option>
+                            <option value="32" selected>32</option>
+                            <option value="48">48</option>
+                            <option value="64">64</option>
+                        </select>
+                    </div>
+                    <div class="h-8 w-px bg-zinc-800 mx-2"></div>
+                    <button id="playSeq" class="bg-[#abff29] text-black px-6 py-2 font-bold text-xs uppercase hover:brightness-110">Play Pattern</button>
+                    <button id="clearSeq" class="bg-zinc-800 text-white px-4 py-2 text-xs uppercase hover:bg-zinc-700">Clear</button>
+                    <div class="flex items-center gap-2 ml-auto">
+                        <label class="text-[10px] text-zinc-500 uppercase">Track Editor:</label>
+                        <select id="seqChannel" class="bg-zinc-800 text-xs p-1 rounded">
+                            <option value="ninjaguy">Ninjaguy</option>
+                            <option value="villager">Villager</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="seq-grid pico-border" id="sequencerGrid">
+                    <!-- Generated by JS -->
                 </div>
             </div>
         </div>
@@ -75,51 +133,303 @@
             'u': 466.16, 'j': 493.88, 'k': 523.25
         };
 
-        let audioCtx, osc, gainNode, destination, analyser, dataArray;
-        let mediaRecorder, recordedChunks = [], isRecording = false;
+        const NOTES = [
+            "C5", "B4", "A#4", "A4", "G#4", "G4", "F#4", "F4", "E4", "D#4", "D4", "C#4", "C4",
+            "B3", "A#3", "A3", "G#3", "G3", "F#3", "F3", "E3", "D#3", "D3", "C#3", "C3"
+        ];
+        const FREQS = [
+            523.25, 493.88, 466.16, 440.00, 415.30, 392.00, 369.99, 349.23, 329.63, 311.13, 293.66, 277.18, 261.63,
+            246.94, 233.08, 220.00, 207.65, 196.00, 185.00, 174.61, 164.81, 155.56, 146.83, 138.59, 130.81
+        ];
+
+        let audioCtx, analyser, dataArray, destination, masterGain;
+        let liveOsc, liveGain, currentVoice = 'ninjaguy';
+        let tiltedWave;
+        
+        // Composer State
+        let isComposerMode = false;
+        let isPlayingSeq = false;
+        let currentStep = 0;
+        let seqInterval;
+        let STEPS = 32;
+        let BPM = 120;
+        
+        const gridData = {
+            ninjaguy: Array(NOTES.length).fill().map(() => Array(64).fill(false)),
+            villager: Array(NOTES.length).fill().map(() => Array(64).fill(false))
+        };
+
+        // Composer Audio
+        let seqOscN, seqGainN, seqOscV, seqGainV;
 
         function initAudio() {
             if (audioCtx) return;
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             
-            // Generate a tilted triangle (slow rise, faster fall)
-            // We use many harmonics to sharpen the "drop" part of the slope
             const terms = 128;
             const real = new Float32Array(terms);
             const imag = new Float32Array(terms);
             for (let n = 1; n < terms; n++) {
-                // The tilt comes from adjusting the phase shift across harmonics
-                // imag[n] provides the basic triangle/saw structure
-                // adding real[n] components "skews" the symmetry
                 imag[n] = (1 / (n * n)) * Math.sin(n * Math.PI * 0.85); 
                 real[n] = (1 / (n * n)) * Math.cos(n * Math.PI * 0.85);
             }
-            const tiltedWave = audioCtx.createPeriodicWave(real, imag);
+            tiltedWave = audioCtx.createPeriodicWave(real, imag);
 
-            osc = audioCtx.createOscillator();
-            gainNode = audioCtx.createGain();
+            masterGain = audioCtx.createGain();
             analyser = audioCtx.createAnalyser();
             destination = audioCtx.createMediaStreamDestination();
 
-            osc.setPeriodicWave(tiltedWave);
-            analyser.fftSize = 2048;
-            dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-            osc.connect(gainNode);
-            gainNode.connect(analyser);
+            masterGain.connect(analyser);
             analyser.connect(audioCtx.destination);
-            gainNode.connect(destination);
+            masterGain.connect(destination);
 
-            gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
-            osc.start();
+            liveOsc = audioCtx.createOscillator();
+            liveGain = audioCtx.createGain();
+            updateLiveVoice();
+            liveGain.gain.value = 0;
+            liveOsc.connect(liveGain);
+            liveGain.connect(masterGain);
+            liveOsc.start();
+
+            seqOscN = audioCtx.createOscillator();
+            seqGainN = audioCtx.createGain();
+            seqOscN.setPeriodicWave(tiltedWave);
+            seqGainN.gain.value = 0;
+            seqOscN.connect(seqGainN);
+            seqGainN.connect(masterGain);
+            seqOscN.start();
+
+            seqOscV = audioCtx.createOscillator();
+            seqGainV = audioCtx.createGain();
+            seqOscV.type = 'triangle'; // Villager is now Triangle
+            seqGainV.gain.value = 0;
+            seqOscV.connect(seqGainV);
+            seqGainV.connect(masterGain);
+            seqOscV.start();
+
+            analyser.fftSize = 1024;
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
             draw();
         }
 
-        // Visualization
+        function updateLiveVoice() {
+            if (!liveOsc) return;
+            if (currentVoice === 'ninjaguy') {
+                liveOsc.setPeriodicWave(tiltedWave);
+            } else {
+                liveOsc.type = 'triangle'; // Villager is now Triangle
+            }
+        }
+
+        const modeToggle = document.getElementById('modeToggle');
+        const liveView = document.getElementById('liveView');
+        const composerView = document.getElementById('composerView');
+
+        modeToggle.onclick = () => {
+            isComposerMode = !isComposerMode;
+            if (isComposerMode) {
+                modeToggle.innerText = "SWITCH TO LIVE";
+                liveView.classList.add('hidden');
+                composerView.classList.remove('hidden');
+                renderSequencer();
+            } else {
+                modeToggle.innerText = "SWITCH TO COMPOSER";
+                liveView.classList.remove('hidden');
+                composerView.classList.add('hidden');
+            }
+        };
+
+        // Settings Listeners
+        const bpmInput = document.getElementById('bpmInput');
+        const lengthSelect = document.getElementById('lengthSelect');
+
+        bpmInput.onchange = () => {
+            BPM = Math.max(40, Math.min(300, parseInt(bpmInput.value) || 120));
+            if (isPlayingSeq) {
+                clearInterval(seqInterval);
+                const stepTime = (60 / BPM) / 2 * 1000; // 16th notes approx
+                seqInterval = setInterval(playNextStep, stepTime);
+            }
+        };
+
+        lengthSelect.onchange = () => {
+            STEPS = parseInt(lengthSelect.value);
+            renderSequencer();
+        };
+
+        const gridEl = document.getElementById('sequencerGrid');
+        const channelSelect = document.getElementById('seqChannel');
+
+        function renderSequencer() {
+            gridEl.innerHTML = '';
+            NOTES.forEach((note, noteIdx) => {
+                const rowLabel = document.createElement('div');
+                rowLabel.className = 'note-label';
+                rowLabel.innerText = note;
+                gridEl.appendChild(rowLabel);
+
+                const row = document.createElement('div');
+                row.className = 'seq-row';
+                for (let s = 0; s < STEPS; s++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'seq-cell';
+                    cell.dataset.note = noteIdx;
+                    cell.dataset.step = s;
+                    updateCellVisual(cell, noteIdx, s);
+                    
+                    cell.onclick = () => {
+                        const chan = channelSelect.value;
+                        gridData[chan][noteIdx][s] = !gridData[chan][noteIdx][s];
+                        updateCellVisual(cell, noteIdx, s);
+                    };
+                    row.appendChild(cell);
+                }
+                gridEl.appendChild(row);
+            });
+        }
+
+        function updateCellVisual(cell, noteIdx, step) {
+            cell.classList.remove('active-ninjaguy', 'active-villager');
+            if (gridData.ninjaguy[noteIdx][step]) cell.classList.add('active-ninjaguy');
+            if (gridData.villager[noteIdx][step]) cell.classList.add('active-villager');
+        }
+
+        document.getElementById('playSeq').onclick = () => {
+            if (!audioCtx) initAudio();
+            if (isPlayingSeq) {
+                clearInterval(seqInterval);
+                isPlayingSeq = false;
+                document.getElementById('playSeq').innerText = "Play Pattern";
+                seqGainN.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
+                seqGainV.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
+            } else {
+                isPlayingSeq = true;
+                document.getElementById('playSeq').innerText = "Stop Pattern";
+                currentStep = 0;
+                const stepTime = (60 / BPM) / 2 * 1000;
+                seqInterval = setInterval(playNextStep, stepTime);
+            }
+        };
+
+        document.getElementById('clearSeq').onclick = () => {
+            gridData.ninjaguy.forEach(row => row.fill(false));
+            gridData.villager.forEach(row => row.fill(false));
+            renderSequencer();
+        };
+
+        function playNextStep() {
+            document.querySelectorAll('.seq-cell').forEach(c => c.classList.remove('playing'));
+            document.querySelectorAll(`.seq-cell[data-step="${currentStep}"]`).forEach(c => c.classList.add('playing'));
+
+            // Process Ninjaguy
+            let activeNoteN = -1;
+            for (let i = 0; i < NOTES.length; i++) {
+                if (gridData.ninjaguy[i][currentStep]) {
+                    activeNoteN = i;
+                    break;
+                }
+            }
+            if (activeNoteN !== -1) {
+                seqOscN.frequency.setTargetAtTime(FREQS[activeNoteN], audioCtx.currentTime, 0.02);
+                seqGainN.gain.setTargetAtTime(0.25, audioCtx.currentTime, 0.01);
+            } else {
+                seqGainN.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
+            }
+
+            // Process Villager
+            let activeNoteV = -1;
+            for (let i = 0; i < NOTES.length; i++) {
+                if (gridData.villager[i][currentStep]) {
+                    activeNoteV = i;
+                    break;
+                }
+            }
+            if (activeNoteV !== -1) {
+                seqOscV.frequency.setTargetAtTime(FREQS[activeNoteV] / 2, audioCtx.currentTime, 0.02);
+                seqGainV.gain.setTargetAtTime(0.25, audioCtx.currentTime, 0.01);
+            } else {
+                seqGainV.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
+            }
+
+            currentStep = (currentStep + 1) % STEPS;
+        }
+
+        const voiceSelect = document.getElementById('voiceSelect');
+        voiceSelect.onchange = (e) => {
+            currentVoice = e.target.value;
+            if (audioCtx) updateLiveVoice();
+        };
+
+        const activeKeys = new Set();
+        window.addEventListener('keydown', (e) => {
+            if (isComposerMode || e.repeat) return;
+            const key = e.key.toLowerCase();
+            if (keyMap[key] && !activeKeys.has(key)) {
+                if (!audioCtx) initAudio();
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                activeKeys.add(key);
+                let targetFreq = keyMap[key];
+                if (currentVoice === 'villager') targetFreq /= 2;
+                liveOsc.frequency.setTargetAtTime(targetFreq, audioCtx.currentTime, GLIDE_TIME);
+                liveGain.gain.setTargetAtTime(0.3, audioCtx.currentTime, 0.01);
+                document.getElementById(`key-${key.toUpperCase()}`)?.classList.add('key-active');
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            const key = e.key.toLowerCase();
+            if (activeKeys.has(key)) {
+                activeKeys.delete(key);
+                document.getElementById(`key-${key.toUpperCase()}`)?.classList.remove('key-active');
+                if (activeKeys.size === 0) {
+                    liveGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
+                } else {
+                    const lastKey = Array.from(activeKeys).pop();
+                    let targetFreq = keyMap[lastKey];
+                    if (currentVoice === 'villager') targetFreq /= 2;
+                    liveOsc.frequency.setTargetAtTime(targetFreq, audioCtx.currentTime, GLIDE_TIME);
+                }
+            }
+        });
+
+        let mediaRecorder, recordedChunks = [], isRecording = false;
+        const recBtn = document.getElementById('recBtn');
+        const recText = document.getElementById('recText');
+        const recDot = document.getElementById('recDot');
+
+        recBtn.onclick = () => {
+            if (!audioCtx) initAudio();
+            if (!isRecording) {
+                recordedChunks = [];
+                mediaRecorder = new MediaRecorder(destination.stream);
+                mediaRecorder.ondataavailable = (e) => recordedChunks.push(e.data);
+                mediaRecorder.onstop = exportWav;
+                mediaRecorder.start();
+                isRecording = true;
+                recText.innerText = "STOP & SAVE";
+                recDot.classList.add('recording-pulse');
+            } else {
+                mediaRecorder.stop();
+                isRecording = false;
+                recText.innerText = "RECORD .WAV";
+                recDot.classList.remove('recording-pulse');
+            }
+        };
+
+        function exportWav() {
+            const blob = new Blob(recordedChunks, { type: 'audio/wav' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `plood-mix-${Date.now()}.wav`;
+            a.click();
+        }
+
         const canvas = document.getElementById('canvas');
         const canvasCtx = canvas.getContext('2d');
         function draw() {
             requestAnimationFrame(draw);
+            if (!analyser) return;
             analyser.getByteTimeDomainData(dataArray);
             canvasCtx.fillStyle = '#000';
             canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
@@ -138,72 +448,6 @@
             canvasCtx.lineTo(canvas.width, canvas.height/2);
             canvasCtx.stroke();
         }
-
-        // Recording logic
-        const recBtn = document.getElementById('recBtn');
-        const recText = document.getElementById('recText');
-        const status = document.getElementById('status');
-        const recDot = document.getElementById('recDot');
-
-        recBtn.onclick = () => {
-            if (!audioCtx) initAudio();
-            if (!isRecording) {
-                recordedChunks = [];
-                mediaRecorder = new MediaRecorder(destination.stream);
-                mediaRecorder.ondataavailable = (e) => recordedChunks.push(e.data);
-                mediaRecorder.onstop = exportWav;
-                mediaRecorder.start();
-                isRecording = true;
-                recText.innerText = "STOP & SAVE";
-                recDot.classList.add('recording-pulse');
-                status.innerText = "RECORDING";
-            } else {
-                mediaRecorder.stop();
-                isRecording = false;
-                recText.innerText = "RECORD .WAV";
-                recDot.classList.remove('recording-pulse');
-                status.innerText = "SAVED";
-            }
-        };
-
-        function exportWav() {
-            const blob = new Blob(recordedChunks, { type: 'audio/wav' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `tilted-saw-${Date.now()}.wav`;
-            a.click();
-        }
-
-        const activeKeys = new Set();
-        window.addEventListener('keydown', (e) => {
-            const key = e.key.toLowerCase();
-            if (keyMap[key] && !activeKeys.has(key)) {
-                if (!audioCtx) initAudio();
-                if (audioCtx.state === 'suspended') audioCtx.resume();
-                activeKeys.add(key);
-                osc.frequency.setTargetAtTime(keyMap[key], audioCtx.currentTime, GLIDE_TIME);
-                gainNode.gain.setTargetAtTime(0.4, audioCtx.currentTime, 0.01);
-                document.getElementById(`key-${key.toUpperCase()}`)?.classList.add('key-active');
-                status.innerText = `PLAYING: ${key.toUpperCase()}`;
-            }
-        });
-
-        window.addEventListener('keyup', (e) => {
-            const key = e.key.toLowerCase();
-            if (activeKeys.has(key)) {
-                activeKeys.delete(key);
-                document.getElementById(`key-${key.toUpperCase()}`)?.classList.remove('key-active');
-                if (activeKeys.size === 0) {
-                    gainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
-                    status.innerText = isRecording ? "RECORDING" : "IDLE";
-                } else {
-                    const lastKey = Array.from(activeKeys).pop();
-                    osc.frequency.setTargetAtTime(keyMap[lastKey], audioCtx.currentTime, GLIDE_TIME);
-                    status.innerText = `PLAYING: ${lastKey.toUpperCase()}`;
-                }
-            }
-        });
     </script>
 </body>
 </html>
