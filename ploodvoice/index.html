@@ -36,8 +36,9 @@
         <div class="bg-[#29adff] p-4 text-black flex justify-between items-center mb-1">
             <h1 class="text-2xl font-bold tracking-tighter uppercase italic">Plood Synth & Composer</h1>
             <div class="flex gap-2">
+                <button id="midiBtn" class="bg-black text-[#29adff] px-3 py-1 text-[10px] border border-black hover:border-[#fff] transition-all font-bold">CONNECT MIDI</button>
                 <button id="modeToggle" class="bg-black text-[#29adff] px-4 py-1 text-xs border border-black hover:border-[#fff] transition-all">SWITCH TO COMPOSER</button>
-                <div id="status" class="bg-black text-white px-3 py-1 text-xs border border-zinc-800">READY</div>
+                <div id="status" class="bg-black text-white px-3 py-1 text-xs border border-zinc-800 uppercase">READY</div>
             </div>
         </div>
 
@@ -53,7 +54,7 @@
                 </div>
 
                 <div id="liveVoiceControls" class="bg-black/40 p-3 rounded border border-zinc-800">
-                    <label class="text-[10px] text-[#5f574f] uppercase tracking-widest font-bold">Live Voice</label>
+                    <label class="text-[10px] text-[#5f574f] uppercase tracking-widest font-bold">Live Voice (MIDI PC 0/1)</label>
                     <select id="voiceSelect" class="w-full mt-2 bg-zinc-800 text-white border border-zinc-700 px-3 py-1.5 rounded text-xs focus:outline-none">
                         <option value="ninjaguy">Ninjaguy (Tilted Saw)</option>
                         <option value="villager">Villager (Octave Triangle)</option>
@@ -85,12 +86,11 @@
                         <div id="key-K" class="white-key flex flex-col justify-end items-center pb-4 text-zinc-400 font-bold text-xs">K</div>
                     </div>
                 </div>
-                <p class="text-[10px] text-zinc-500 text-center uppercase">Keyboard input active for Live Voice</p>
+                <p class="text-[10px] text-zinc-500 text-center uppercase">Keyboard or MIDI input active for Live Voice</p>
             </div>
 
             <!-- COMPOSER MODE -->
             <div id="composerView" class="hidden">
-                <!-- Composer Settings -->
                 <div class="flex flex-wrap gap-4 mb-4 items-end bg-black/20 p-3 rounded">
                     <div>
                         <label class="block text-[10px] text-zinc-500 uppercase mb-1">BPM</label>
@@ -146,7 +146,6 @@
         let liveOsc, liveGain, currentVoice = 'ninjaguy';
         let tiltedWave;
         
-        // Composer State
         let isComposerMode = false;
         let isPlayingSeq = false;
         let currentStep = 0;
@@ -159,7 +158,6 @@
             villager: Array(NOTES.length).fill().map(() => Array(64).fill(false))
         };
 
-        // Composer Audio
         let seqOscN, seqGainN, seqOscV, seqGainV;
 
         function initAudio() {
@@ -201,7 +199,7 @@
 
             seqOscV = audioCtx.createOscillator();
             seqGainV = audioCtx.createGain();
-            seqOscV.type = 'triangle'; // Villager is now Triangle
+            seqOscV.type = 'triangle';
             seqGainV.gain.value = 0;
             seqOscV.connect(seqGainV);
             seqGainV.connect(masterGain);
@@ -217,8 +215,84 @@
             if (currentVoice === 'ninjaguy') {
                 liveOsc.setPeriodicWave(tiltedWave);
             } else {
-                liveOsc.type = 'triangle'; // Villager is now Triangle
+                liveOsc.type = 'triangle';
             }
+            document.getElementById('voiceSelect').value = currentVoice;
+        }
+
+        // MIDI Logic
+        const midiBtn = document.getElementById('midiBtn');
+        let midiAccess = null;
+        let activeMidiNotes = new Map();
+
+        midiBtn.onclick = async () => {
+            initAudio();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+
+            if (!navigator.requestMIDIAccess) {
+                document.getElementById('status').innerText = "MIDI NOT SUPPORTED";
+                return;
+            }
+
+            try {
+                midiAccess = await navigator.requestMIDIAccess();
+                document.getElementById('status').innerText = "MIDI CONNECTED";
+                midiBtn.innerText = "MIDI ACTIVE";
+                midiBtn.classList.add('bg-zinc-800');
+
+                for (let input of midiAccess.inputs.values()) {
+                    input.onmidimessage = handleMidiMessage;
+                }
+            } catch (err) {
+                document.getElementById('status').innerText = "MIDI DENIED";
+            }
+        };
+
+        function midiNoteToFreq(note) {
+            return 440 * Math.pow(2, (note - 69) / 12);
+        }
+
+        function handleMidiMessage(msg) {
+            const [statusByte, data1, data2] = msg.data;
+            const command = statusByte & 0xF0;
+            const channel = statusByte & 0x0F;
+
+            // Note On
+            if (command === 0x90 && data2 > 0) {
+                const freq = midiNoteToFreq(data1);
+                activeMidiNotes.set(data1, freq);
+                playLiveNote(freq);
+            }
+            // Note Off
+            else if (command === 0x80 || (command === 0x90 && data2 === 0)) {
+                activeMidiNotes.delete(data1);
+                if (activeMidiNotes.size === 0) {
+                    stopLiveNote();
+                } else {
+                    // Glide to last held note
+                    const lastFreq = Array.from(activeMidiNotes.values()).pop();
+                    playLiveNote(lastFreq);
+                }
+            }
+            // Program Change
+            else if (command === 0xC0) {
+                if (data1 === 0) currentVoice = 'ninjaguy';
+                else if (data1 === 1) currentVoice = 'villager';
+                updateLiveVoice();
+            }
+        }
+
+        function playLiveNote(freq) {
+            if (!liveOsc) return;
+            let targetFreq = freq;
+            if (currentVoice === 'villager') targetFreq /= 2;
+            liveOsc.frequency.setTargetAtTime(targetFreq, audioCtx.currentTime, GLIDE_TIME);
+            liveGain.gain.setTargetAtTime(0.3, audioCtx.currentTime, 0.01);
+        }
+
+        function stopLiveNote() {
+            if (!liveGain) return;
+            liveGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
         }
 
         const modeToggle = document.getElementById('modeToggle');
@@ -239,7 +313,6 @@
             }
         };
 
-        // Settings Listeners
         const bpmInput = document.getElementById('bpmInput');
         const lengthSelect = document.getElementById('lengthSelect');
 
@@ -247,7 +320,7 @@
             BPM = Math.max(40, Math.min(300, parseInt(bpmInput.value) || 120));
             if (isPlayingSeq) {
                 clearInterval(seqInterval);
-                const stepTime = (60 / BPM) / 2 * 1000; // 16th notes approx
+                const stepTime = (60 / BPM) / 2 * 1000;
                 seqInterval = setInterval(playNextStep, stepTime);
             }
         };
@@ -321,7 +394,6 @@
             document.querySelectorAll('.seq-cell').forEach(c => c.classList.remove('playing'));
             document.querySelectorAll(`.seq-cell[data-step="${currentStep}"]`).forEach(c => c.classList.add('playing'));
 
-            // Process Ninjaguy
             let activeNoteN = -1;
             for (let i = 0; i < NOTES.length; i++) {
                 if (gridData.ninjaguy[i][currentStep]) {
@@ -336,7 +408,6 @@
                 seqGainN.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
             }
 
-            // Process Villager
             let activeNoteV = -1;
             for (let i = 0; i < NOTES.length; i++) {
                 if (gridData.villager[i][currentStep]) {
@@ -368,10 +439,7 @@
                 if (!audioCtx) initAudio();
                 if (audioCtx.state === 'suspended') audioCtx.resume();
                 activeKeys.add(key);
-                let targetFreq = keyMap[key];
-                if (currentVoice === 'villager') targetFreq /= 2;
-                liveOsc.frequency.setTargetAtTime(targetFreq, audioCtx.currentTime, GLIDE_TIME);
-                liveGain.gain.setTargetAtTime(0.3, audioCtx.currentTime, 0.01);
+                playLiveNote(keyMap[key]);
                 document.getElementById(`key-${key.toUpperCase()}`)?.classList.add('key-active');
             }
         });
@@ -382,12 +450,10 @@
                 activeKeys.delete(key);
                 document.getElementById(`key-${key.toUpperCase()}`)?.classList.remove('key-active');
                 if (activeKeys.size === 0) {
-                    liveGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
+                    stopLiveNote();
                 } else {
                     const lastKey = Array.from(activeKeys).pop();
-                    let targetFreq = keyMap[lastKey];
-                    if (currentVoice === 'villager') targetFreq /= 2;
-                    liveOsc.frequency.setTargetAtTime(targetFreq, audioCtx.currentTime, GLIDE_TIME);
+                    playLiveNote(keyMap[lastKey]);
                 }
             }
         });
