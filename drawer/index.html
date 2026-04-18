@@ -1,0 +1,329 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getFirestore, 
+  doc, 
+  onSnapshot, 
+  setDoc, 
+  collection, 
+  query, 
+  addDoc, 
+  deleteDoc, 
+  getDocs 
+} from 'firebase/firestore';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { Eraser, Pencil, Trash2, Smartphone, Monitor } from 'lucide-react';
+
+// --- Firebase Configuration ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'shared-canvas-demo';
+
+export default function App() {
+  const canvasRef = useRef(null);
+  const contextRef = useRef(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [user, setUser] = useState(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [color, setColor] = useState('#3b82f6');
+  const [lineWidth, setLineWidth] = useState(5);
+  const [isEraser, setIsEraser] = useState(false);
+
+  // 1. Initialize Auth correctly (RULE 3)
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Auth initialization error:", err);
+      }
+    };
+
+    initAuth();
+
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      if (currentUser) {
+        setIsAuthReady(true);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Setup Canvas
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const handleResize = () => {
+      // Store current drawing
+      const tempCanvas = document.createElement('canvas');
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCanvas.width = canvas.width;
+      tempCanvas.height = canvas.height;
+      tempCtx.drawImage(canvas, 0, 0);
+
+      // Resize
+      canvas.width = window.innerWidth * 2;
+      canvas.height = window.innerHeight * 2;
+      canvas.style.width = `${window.innerWidth}px`;
+      canvas.style.height = `${window.innerHeight}px`;
+
+      const context = canvas.getContext('2d');
+      context.scale(2, 2);
+      context.lineCap = 'round';
+      context.lineJoin = 'round';
+      contextRef.current = context;
+
+      // Restore drawing
+      context.drawImage(tempCanvas, 0, 0, window.innerWidth, window.innerHeight);
+    };
+
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // 3. Listen for Remote Strokes (Guarded by user and isAuthReady)
+  useEffect(() => {
+    if (!user || !isAuthReady) return;
+
+    // Use specific path pattern (RULE 1)
+    const strokesRef = collection(db, 'artifacts', appId, 'public', 'data', 'strokes');
+    
+    // Simple query (RULE 2)
+    const unsubscribe = onSnapshot(
+      strokesRef, 
+      (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added') {
+            const data = change.doc.data();
+            // Don't redraw our own local stroke
+            if (data.userId !== user.uid) {
+              renderStroke(data);
+            }
+          } else if (change.type === 'removed') {
+            // Check if collection is now empty to clear local
+            if (snapshot.empty) {
+              clearLocalCanvas();
+            }
+          }
+        });
+      }, 
+      (err) => {
+        console.error("Firestore Permission/Subscription Error:", err);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [user, isAuthReady]);
+
+  const renderStroke = (stroke) => {
+    const ctx = contextRef.current;
+    if (!ctx) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(stroke.startX, stroke.startY);
+    ctx.lineTo(stroke.endX, stroke.endY);
+    ctx.strokeStyle = stroke.color;
+    ctx.lineWidth = stroke.width;
+    ctx.globalCompositeOperation = stroke.isEraser ? 'destination-out' : 'source-over';
+    ctx.stroke();
+    ctx.closePath();
+    ctx.restore();
+  };
+
+  const startDrawing = (e) => {
+    if (!isAuthReady) return;
+    const { x, y } = getCoordinates(e);
+    setIsDrawing(true);
+    contextRef.current.lastX = x;
+    contextRef.current.lastY = y;
+  };
+
+  const draw = async (e) => {
+    if (!isDrawing || !user || !isAuthReady) return;
+    const { x, y } = getCoordinates(e);
+    const ctx = contextRef.current;
+
+    const strokeData = {
+      startX: ctx.lastX,
+      startY: ctx.lastY,
+      endX: x,
+      endY: y,
+      color: color,
+      width: lineWidth,
+      isEraser: isEraser,
+      userId: user.uid,
+      timestamp: Date.now()
+    };
+
+    // Render locally immediately for zero latency
+    renderStroke(strokeData);
+
+    // Update last position
+    ctx.lastX = x;
+    ctx.lastY = y;
+
+    // Send to Firestore
+    try {
+      const strokesRef = collection(db, 'artifacts', appId, 'public', 'data', 'strokes');
+      await addDoc(strokesRef, strokeData);
+    } catch (err) {
+      console.error("Error saving stroke:", err);
+    }
+  };
+
+  const stopDrawing = () => {
+    setIsDrawing(false);
+  };
+
+  const getCoordinates = (e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    let clientX, clientY;
+
+    if (e.touches && e.touches.length > 0) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else {
+      clientX = e.clientX;
+      clientY = e.clientY;
+    }
+
+    return {
+      x: clientX - rect.left,
+      y: clientY - rect.top
+    };
+  };
+
+  const clearLocalCanvas = () => {
+    const canvas = canvasRef.current;
+    const ctx = contextRef.current;
+    if (ctx && canvas) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  };
+
+  const clearAll = async () => {
+    if (!user || !isAuthReady) return;
+    try {
+      const strokesRef = collection(db, 'artifacts', appId, 'public', 'data', 'strokes');
+      const snapshot = await getDocs(strokesRef);
+      // Logic to clear screen globally
+      const deletePromises = snapshot.docs.map(document => 
+        deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'strokes', document.id))
+      );
+      await Promise.all(deletePromises);
+      clearLocalCanvas();
+    } catch (err) {
+      console.error("Error clearing canvas:", err);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-100 flex flex-col overflow-hidden touch-none font-sans select-none">
+      {/* Tool Bar */}
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-white/95 backdrop-blur shadow-2xl rounded-2xl p-2 flex items-center gap-3 border border-slate-200">
+        <button 
+          onClick={() => setIsEraser(false)}
+          className={`p-3 rounded-xl transition-all ${!isEraser ? 'bg-blue-600 text-white shadow-md' : 'hover:bg-slate-100 text-slate-600'}`}
+        >
+          <Pencil size={20} />
+        </button>
+        <button 
+          onClick={() => setIsEraser(true)}
+          className={`p-3 rounded-xl transition-all ${isEraser ? 'bg-blue-600 text-white shadow-md' : 'hover:bg-slate-100 text-slate-600'}`}
+        >
+          <Eraser size={20} />
+        </button>
+        
+        <div className="h-8 w-[1px] bg-slate-200 mx-1" />
+
+        <div className="relative group">
+          <input 
+            type="color" 
+            value={color} 
+            onChange={(e) => setColor(e.target.value)}
+            className="w-10 h-10 rounded-lg cursor-pointer border-2 border-slate-100 p-0 overflow-hidden bg-white"
+          />
+        </div>
+
+        <div className="hidden md:flex items-center gap-2 px-2">
+          <input 
+            type="range" 
+            min="1" 
+            max="30" 
+            value={lineWidth} 
+            onChange={(e) => setLineWidth(parseInt(e.target.value))}
+            className="w-24 h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+          />
+        </div>
+
+        <button 
+          onClick={clearAll}
+          className="p-3 text-red-500 hover:bg-red-50 rounded-xl transition-all"
+        >
+          <Trash2 size={20} />
+        </button>
+      </div>
+
+      {/* Connection Helper Info */}
+      <div className="absolute bottom-6 right-6 z-20 p-4 bg-white/95 backdrop-blur-sm rounded-2xl border border-slate-200 text-[11px] text-slate-500 shadow-xl flex flex-col gap-2 w-56">
+        <div className="flex items-center gap-2 font-bold text-slate-800 text-xs">
+          <div className={`w-2.5 h-2.5 rounded-full ${isAuthReady ? 'bg-green-500 animate-pulse' : 'bg-amber-400'}`} />
+          {isAuthReady ? 'Connected to Cloud' : 'Connecting...'}
+        </div>
+        <div className="space-y-1.5 opacity-80">
+          <div className="flex items-center gap-2">
+            <span className="w-4 h-4 rounded-full bg-slate-100 flex items-center justify-center text-[10px] font-bold">1</span>
+            <span>Connect USB Cable</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-4 h-4 rounded-full bg-slate-100 flex items-center justify-center text-[10px] font-bold">2</span>
+            <span>Turn on USB Tethering</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-4 h-4 rounded-full bg-slate-100 flex items-center justify-center text-[10px] font-bold">3</span>
+            <span>Visit PC's IP on phone</span>
+          </div>
+        </div>
+        <div className="pt-2 mt-1 border-t border-slate-100 flex justify-between items-center text-slate-400">
+           <div className="flex items-center gap-1"><Smartphone size={12} /> Phone</div>
+           <div className="w-4 h-[1px] bg-slate-200" />
+           <div className="flex items-center gap-1">PC <Monitor size={12} /></div>
+        </div>
+      </div>
+
+      {/* Drawing Canvas */}
+      <canvas
+        ref={canvasRef}
+        onMouseDown={startDrawing}
+        onMouseMove={draw}
+        onMouseUp={stopDrawing}
+        onMouseOut={stopDrawing}
+        onTouchStart={(e) => { e.preventDefault(); startDrawing(e); }}
+        onTouchMove={(e) => { e.preventDefault(); draw(e); }}
+        onTouchEnd={(e) => { e.preventDefault(); stopDrawing(); }}
+        className="w-full h-full bg-white touch-none"
+      />
+      
+      {/* Loading Overlay */}
+      {!isAuthReady && (
+        <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="flex flex-col items-center gap-4">
+            <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+            <p className="text-slate-600 font-medium animate-pulse">Initializing shared space...</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
