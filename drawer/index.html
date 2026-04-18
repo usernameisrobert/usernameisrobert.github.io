@@ -6,26 +6,58 @@
     <title>USB Shared Canvas</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- QRCode library for automatic joining -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
         body { touch-action: none; overflow: hidden; background-color: #f3f4f6; }
-        canvas { cursor: crosshair; touch-action: none; }
-        .controls { z-index: 10; }
+        canvas { 
+            cursor: crosshair; 
+            touch-action: none; 
+            background-color: white;
+            image-rendering: pixelated;
+        }
+        #canvas-container {
+            aspect-ratio: 1 / 1;
+            max-width: 100%;
+            max-height: 100%;
+        }
+        /* Mobile side controls */
+        @media (max-width: 768px) {
+            .side-controls {
+                flex-direction: column !important;
+                right: 1rem !important;
+                left: auto !important;
+                top: 50% !important;
+                transform: translateY(-50%) !important;
+                bottom: auto !important;
+                padding: 1rem 0.5rem !important;
+            }
+            .side-controls input[type="range"] {
+                writing-mode: bt-lr; /* Vertical range */
+                appearance: slider-vertical;
+                width: 8px;
+                height: 80px;
+            }
+        }
     </style>
 </head>
-<body class="flex flex-col h-screen font-sans">
+<body class="flex flex-col h-screen font-sans bg-gray-900">
 
     <!-- Header / Connection UI -->
-    <div id="setup" class="bg-white p-4 shadow-md flex flex-col md:flex-row items-center justify-between gap-4">
+    <div id="setup" class="bg-white p-4 shadow-md flex flex-col md:flex-row items-center justify-between gap-4 z-20">
         <div class="flex items-center gap-2">
             <div class="w-3 h-3 rounded-full bg-red-500" id="status-dot"></div>
             <span id="status-text" class="text-sm font-medium text-gray-600">Disconnected</span>
         </div>
 
-        <div id="host-controls" class="flex gap-2">
+        <div id="host-controls" class="flex items-center gap-4">
             <button onclick="startHosting()" id="host-btn" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">Host Session</button>
-            <div id="id-display" class="hidden items-center gap-2 bg-gray-100 px-3 py-2 rounded border">
-                <span class="text-xs text-gray-500">ID:</span>
-                <code id="my-id" class="font-bold text-blue-700"></code>
+            <div id="id-display" class="hidden flex flex-col items-center gap-2 bg-gray-100 p-3 rounded border">
+                <div class="flex items-center gap-2">
+                    <span class="text-xs text-gray-500 font-bold uppercase">Scan to Join:</span>
+                    <code id="my-id" class="font-bold text-blue-700"></code>
+                </div>
+                <div id="qrcode" class="bg-white p-2"></div>
             </div>
         </div>
 
@@ -36,14 +68,21 @@
     </div>
 
     <!-- Canvas Area -->
-    <div class="relative flex-grow bg-white m-4 rounded-xl shadow-inner overflow-hidden border border-gray-200">
-        <canvas id="canvas"></canvas>
+    <div class="flex-grow flex items-center justify-center p-2 relative overflow-hidden">
+        <div id="canvas-container" class="relative shadow-2xl border border-gray-700">
+            <canvas id="canvas"></canvas>
+        </div>
         
-        <!-- Toolbar -->
-        <div class="absolute bottom-4 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur shadow-lg border rounded-full px-6 py-3 flex items-center gap-6">
+        <!-- Fullscreen Toggle (Visible on Mobile) -->
+        <button onclick="toggleFullscreen()" class="md:hidden absolute top-4 right-4 bg-white/20 backdrop-blur p-2 rounded-full text-white z-10">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+        </button>
+
+        <!-- Toolbar / Side Controls -->
+        <div id="toolbar" class="side-controls absolute bottom-4 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur shadow-lg border rounded-full px-6 py-3 flex items-center gap-6 z-10">
             <input type="color" id="colorPicker" value="#2563eb" class="w-8 h-8 rounded-full border-none cursor-pointer">
-            <input type="range" id="sizePicker" min="1" max="20" value="5" class="w-24 accent-blue-600">
-            <button onclick="clearCanvas(true)" class="text-gray-500 hover:text-red-500 transition">
+            <input type="range" id="sizePicker" min="1" max="50" value="5" class="w-24 accent-blue-600">
+            <button onclick="clearCanvas(true)" class="text-gray-500 hover:text-red-500 transition" title="Clear Canvas">
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
             </button>
         </div>
@@ -57,27 +96,35 @@
         const statusDot = document.getElementById('status-dot');
         const statusText = document.getElementById('status-text');
         
+        // Fixed internal resolution for consistent drawing
+        const INTERNAL_RES = 1024;
+        canvas.width = INTERNAL_RES;
+        canvas.height = INTERNAL_RES;
+
         let peer = null;
         let connection = null;
         let isDrawing = false;
         let lastPos = { x: 0, y: 0 };
 
-        // Resize canvas to fill parent
-        function resize() {
-            const container = canvas.parentElement;
-            canvas.width = container.clientWidth;
-            canvas.height = container.clientHeight;
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
+        // Handle scaling for mouse/touch
+        function getPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            
+            // Map CSS display pixels to internal 1024x1024 coordinates
+            const x = (clientX - rect.left) * (INTERNAL_RES / rect.width);
+            const y = (clientY - rect.top) * (INTERNAL_RES / rect.height);
+            
+            return { x, y };
         }
-        window.addEventListener('resize', resize);
-        resize();
 
-        // Drawing Logic
         function draw(x1, y1, x2, y2, color, size, emit = true) {
             ctx.beginPath();
             ctx.strokeStyle = color;
             ctx.lineWidth = size;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
             ctx.moveTo(x1, y1);
             ctx.lineTo(x2, y2);
             ctx.stroke();
@@ -98,17 +145,6 @@
             }
         }
 
-        // Mouse/Touch Events
-        function getPos(e) {
-            const rect = canvas.getBoundingClientRect();
-            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-            return {
-                x: clientX - rect.left,
-                y: clientY - rect.top
-            };
-        }
-
         function handleStart(e) {
             isDrawing = true;
             lastPos = getPos(e);
@@ -119,6 +155,7 @@
             const currentPos = getPos(e);
             draw(lastPos.x, lastPos.y, currentPos.x, currentPos.y, colorPicker.value, sizePicker.value);
             lastPos = currentPos;
+            e.preventDefault();
         }
 
         function handleEnd() {
@@ -128,11 +165,21 @@
         canvas.addEventListener('mousedown', handleStart);
         canvas.addEventListener('mousemove', handleMove);
         window.addEventListener('mouseup', handleEnd);
-        canvas.addEventListener('touchstart', handleStart);
-        canvas.addEventListener('touchmove', handleMove);
+        canvas.addEventListener('touchstart', handleStart, { passive: false });
+        canvas.addEventListener('touchmove', handleMove, { passive: false });
         window.addEventListener('touchend', handleEnd);
 
-        // Networking Logic
+        // UI Helpers
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(err => {
+                    console.error(`Error attempting to enable full-screen mode: ${err.message}`);
+                });
+            } else {
+                document.exitFullscreen();
+            }
+        }
+
         function updateStatus(state, msg) {
             statusText.innerText = msg;
             statusDot.className = `w-3 h-3 rounded-full ${state === 'connected' ? 'bg-green-500' : state === 'pending' ? 'bg-yellow-500' : 'bg-red-500'}`;
@@ -142,7 +189,7 @@
             connection = conn;
             connection.on('open', () => {
                 updateStatus('connected', 'Connected to Peer');
-                document.getElementById('setup').classList.add('hidden'); // Hide setup UI once connected
+                document.getElementById('setup').classList.add('hidden');
             });
 
             connection.on('data', (payload) => {
@@ -160,6 +207,18 @@
             });
         }
 
+        function generateQR(id) {
+            const url = new URL(window.location.href);
+            url.searchParams.set('join', id);
+            
+            document.getElementById('qrcode').innerHTML = "";
+            new QRCode(document.getElementById("qrcode"), {
+                text: url.toString(),
+                width: 128,
+                height: 128
+            });
+        }
+
         function startHosting() {
             peer = new Peer();
             updateStatus('pending', 'Generating ID...');
@@ -168,6 +227,7 @@
                 document.getElementById('my-id').innerText = id;
                 document.getElementById('id-display').classList.remove('hidden');
                 document.getElementById('host-btn').classList.add('hidden');
+                generateQR(id);
                 updateStatus('pending', 'Waiting for partner...');
             });
 
@@ -176,8 +236,8 @@
             });
         }
 
-        function joinSession() {
-            const id = document.getElementById('join-id').value.trim();
+        function joinSession(targetId) {
+            const id = targetId || document.getElementById('join-id').value.trim();
             if (!id) return;
             
             peer = new Peer();
@@ -193,6 +253,16 @@
                 updateStatus('disconnected', 'Failed to connect');
             });
         }
+
+        // Auto-join if ID is in URL
+        window.onload = () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const joinId = urlParams.get('join');
+            if (joinId) {
+                document.getElementById('join-id').value = joinId;
+                joinSession(joinId);
+            }
+        };
     </script>
 </body>
 </html>
